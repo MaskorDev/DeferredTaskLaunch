@@ -55,8 +55,11 @@ public class DatabaseConnection {
                 params JSON NOT NULL,
                 scheduled_time TIMESTAMP NOT NULL,
                 status ENUM('PENDING', 'PROCESSING', 'COMPLETED', 'FAILED', 'CANCELLED') DEFAULT 'PENDING',
-                attempt_count INT DEFAULT 0,
                 max_attempts INT DEFAULT 1,
+                exponential_backoff BOOLEAN DEFAULT FALSE,
+                backoff_base DOUBLE DEFAULT 0,
+                max_backoff_ms BIGINT DEFAULT 0,
+                attempt_count INT DEFAULT 0,
                 next_attempt_time TIMESTAMP NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 INDEX (category, status, scheduled_time)

@@ -8,13 +8,18 @@ public class TaskManagerImpl implements TaskManager{
 
     @Override
     public long schedule(String category, Class<Task> clazz, TaskParams params, LocalDateTime time){
-        String sql = "INSERT INTO scheduled_tasks (category, task_class, params, scheduled_time)" + "VALUES (?, ?, ?, ?)";
+        String sql = "INSERT INTO scheduled_tasks (category, task_class, params, scheduled_time,"
+                + "max_attempts, exponential_backoff, backoff_base, max_backoff_ms" + "VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
         try (Connection conn = DatabaseConnection.getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql, PreparedStatement.RETURN_GENERATED_KEYS)) {
             stmt.setString(1, category);
             stmt.setString(2, clazz.getName());
-            stmt.setString(3, params.getData());
+            stmt.setString(3, params.getJsonData());
             stmt.setTimestamp(4, Timestamp.valueOf(time));
+            stmt.setInt(5, params.getMaxAttempt());
+            stmt.setBoolean(6, params.isExponentialBackoff());
+            stmt.setDouble(7, params.getBackoffBase());
+            stmt.setLong(8, params.getMaxBackoffMs());
 
             stmt.executeUpdate();
 
