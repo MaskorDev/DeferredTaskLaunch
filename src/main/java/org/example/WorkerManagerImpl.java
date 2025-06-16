@@ -1,18 +1,14 @@
 package org.example;
 
-import com.mysql.cj.x.protobuf.MysqlxCrud;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.crypto.CipherInputStream;
 import java.sql.*;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.*;
-
-import static com.mysql.cj.conf.PropertyKey.logger;
 
 public class WorkerManagerImpl implements WorkerManager {
     private static final Logger logger = LoggerFactory.getLogger(WorkerManagerImpl.class);
@@ -28,23 +24,30 @@ public class WorkerManagerImpl implements WorkerManager {
         ExecutorService executor = Executors.newFixedThreadPool(workerParams.getThreadCount());
         workers.put(workerParams.getCategory(), executor);
 
-        ScheduledExecutorService scheduledExecutorService = Executors.newSingleThreadScheduledExecutor();
-        scheduledExecutorService.scheduleAtFixedRate(() ->
-                processTasks(workerParams.getCategory()), 0, 1, TimeUnit.SECONDS);
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+        scheduler.scheduleAtFixedRate(() -> {
+            try {
+                processTasks(workerParams.getCategory());
+            } catch (Exception e) {
+                logger.error("Error in task scheduler", e);
+            }
+        }, 0, 1, TimeUnit.SECONDS);
+
+        logger.info("Worker initialized for category: {} with {} threads",
+                workerParams.getCategory(), workerParams.getThreadCount());
     }
 
     private List<TaskData> fetchPendingTasks(String category) {
         List<TaskData> tasks = new ArrayList<>();
-        String sql = "SELECT * FROM scheduled_tasks " +
-                "WHERE category = ? AND STATUS = 'PENDING' " +
+        String sql = "SELECT * FROM deferred_" + category +
+                " WHERE status = 'PENDING' " +
                 "AND (scheduled_time <= NOW() OR next_attempt_time <= NOW()) " +
                 "ORDER BY scheduled_time LIMIT 100";
 
         try (Connection conn = DatabaseConnection.getConnection();
-        PreparedStatement stmt = conn.prepareStatement(sql)) {
-            stmt.setString(1, category);
-            ResultSet rs = stmt.executeQuery();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
 
+            ResultSet rs = stmt.executeQuery();
             while (rs.next()) {
                 tasks.add(new TaskData(
                         rs.getLong("id"),
@@ -60,25 +63,63 @@ public class WorkerManagerImpl implements WorkerManager {
                 ));
             }
         } catch (SQLException ex) {
-            System.out.println(ex);
+            logger.error("Error fetching tasks for category: {}", category, ex);
         }
         return tasks;
     }
 
-
     private void processTasks(String category) {
         List<TaskData> tasks = fetchPendingTasks(category);
-        ExecutorService executor = workers.get(category);
+        logger.debug("Found {} pending tasks for category: {}", tasks.size(), category);
 
+        ExecutorService executor = workers.get(category);
         if (executor != null) {
-            for (TaskData task: tasks) {
+            for (TaskData task : tasks) {
                 executor.submit(() -> {
-                        try {
-                            executeTaskWithRetry(task);
-                        } catch (SQLException ex) {
-                            System.err.println("Error processing task: " + task.getId() + " " + ex.getMessage());
-                        }
+                    try {
+                        executeTaskWithRetry(task);
+                    } catch (SQLException ex) {
+                        logger.error("Database error processing task {}", task.getId(), ex);
+                    } catch (Exception ex) {
+                        logger.error("Unexpected error processing task {}", task.getId(), ex);
+                    }
                 });
+            }
+        }
+    }
+
+    private void executeTaskWithRetry(TaskData task) throws SQLException {
+        int attempt = 0;
+        boolean taskCompleted = false;
+        String category = task.getCategory();
+
+        while (attempt < task.getMaxAttempts() && !taskCompleted) {
+            attempt++;
+
+            try {
+                if (lockTaskInDatabase(category, task.getId())) {
+                    logger.info("Starting task {} (attempt {}/{})",
+                            task.getId(), attempt, task.getMaxAttempts());
+
+                    executeTask(task);
+
+                    updateTaskStatus(category, task.getId(), "COMPLETED");
+                    taskCompleted = true;
+                    logger.info("Task {} completed successfully", task.getId());
+                }
+            } catch (Exception ex) {
+                logger.error("Error executing task {} (attempt {})", task.getId(), attempt, ex);
+
+                if (attempt < task.getMaxAttempts()) {
+                    long delay = calculateRetryDelay(task, attempt);
+                    logger.info("Scheduling retry for task {} in {} ms", task.getId(), delay);
+                    scheduleNextAttempt(task, delay);
+                } else {
+                    updateTaskStatus(category, task.getId(), "FAILED");
+                    logger.error("Task {} failed after {} attempts", task.getId(), task.getMaxAttempts());
+                }
+            } finally {
+                unlockTaskInDatabase(category, task.getId());
             }
         }
     }
@@ -92,93 +133,50 @@ public class WorkerManagerImpl implements WorkerManager {
         return Math.min((long) delay, task.getMaxBackoffMs());
     }
 
-    private void updateTaskStatus(long taskId, String status) {
-        String sql = "UPDATE scheduled_tasks SET status = ? WHERE id = ?";
-
-        try (Connection conn = DatabaseConnection.getConnection();
-        PreparedStatement stmt = conn.prepareStatement(sql)) {
-            stmt.setString(1, status);
-            stmt.setLong(2, taskId);
-
-            stmt.executeUpdate();
-        } catch (SQLException ex) {
-            System.out.println(ex);
-        }
-    }
-
-    @Override
-    public void destroy(String category) {
-        ExecutorService executor = workers.get(category);
-        if (executor != null) {
-            executor.shutdown();
-            workers.remove(category);
-        }
-    }
-
-    private void executeTaskWithRetry(TaskData task) throws SQLException {
-        int attempt = 0;
-        boolean taskCompleted = false;
-
-        while (attempt < task.getMaxAttempts() && !taskCompleted) {
-            attempt++;
-
-            if (!lockTaskInDatabase(task.getId())) {
-                continue;
-            }
-
-            try {
-                executeTask(task);
-                updateTaskStatus(task.getId(), "COMPLETED");
-                taskCompleted = true;
-            } catch (Exception ex) {
-                logger.error("Task attempt failed", ex);
-                if (attempt < task.getMaxAttempts()) {
-                    long delay = calculateRetryDelay(task, attempt);
-                    scheduleNextAttemp(task, delay);
-                } else {
-                    updateTaskStatus(task.getId(), "FAILED");
-                }
-            } finally {
-                unlockTaskInDatabase(task.getId());
-            }
-        }
-    }
-
-    private boolean lockTaskInDatabase(long taskId) throws SQLException {
-        String sql = "UPDATE scheduled_tasks SET status = 'PROCESSING' " +
+    private boolean lockTaskInDatabase(String category, long taskId) throws SQLException {
+        String sql = "UPDATE deferred_" + category +
+                " SET status = 'PROCESSING' " +
                 "WHERE id = ? AND status = 'PENDING'";
 
         try (Connection conn = DatabaseConnection.getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.setLong(1, taskId);
-            return stmt.executeUpdate() > 0; // Возвращаем true если заблокировали
+            int updated = stmt.executeUpdate();
+            return updated > 0;
         }
     }
 
-    private boolean unlockTaskInDatabase(long taskId) throws SQLException {
-        String sql = "UPDATE scheduled_tasks SET status = 'PENDING' " +
+    private void unlockTaskInDatabase(String category, long taskId) throws SQLException {
+        String sql = "UPDATE deferred_" + category +
+                " SET status = 'PENDING' " +
                 "WHERE id = ? AND status = 'PROCESSING'";
 
         try (Connection conn = DatabaseConnection.getConnection();
-             PreparedStatement statement = conn.prepareStatement(sql)) {
-            statement.setLong(1, taskId);
-
-            statement.executeUpdate();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setLong(1, taskId);
+            stmt.executeUpdate();
         }
-        return false;
     }
 
-    private void executeTask(TaskData taskData) throws Exception {
-        Class<?> clazz = Class.forName(taskData.getTaskClass());
-        Task taskInstance = (Task) clazz.getDeclaredConstructor().newInstance();
-        taskInstance.execute(new TaskParams(taskData.getParams()));
+    private void updateTaskStatus(String category, long taskId, String status) {
+        String sql = "UPDATE deferred_" + category + " SET status = ? WHERE id = ?";
+
+        try (Connection conn = DatabaseConnection.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setString(1, status);
+            stmt.setLong(2, taskId);
+            stmt.executeUpdate();
+        } catch (SQLException ex) {
+            logger.error("Failed to update status for task {}", taskId, ex);
+        }
     }
 
-    private void scheduleNextAttemp(TaskData task, long delayMs) {
+    private void scheduleNextAttempt(TaskData task, long delayMs) {
         LocalDateTime nextAttempt = LocalDateTime.now().plus(delayMs, ChronoUnit.MILLIS);
+        String category = task.getCategory();
 
-        String sql = "UPDATE scheduled_tasks " +
-                "SET status = 'PENDING', " +
+        String sql = "UPDATE deferred_" + category +
+                " SET status = 'PENDING', " +
                 "attempt_count = attempt_count + 1, " +
                 "next_attempt_time = ? " +
                 "WHERE id = ?";
@@ -187,9 +185,25 @@ public class WorkerManagerImpl implements WorkerManager {
              PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.setTimestamp(1, Timestamp.valueOf(nextAttempt));
             stmt.setLong(2, task.getId());
-            stmt.executeUpdate(); // Важно!
+            stmt.executeUpdate();
         } catch (SQLException ex) {
             logger.error("Failed to reschedule task {}", task.getId(), ex);
+        }
+    }
+
+    private void executeTask(TaskData taskData) throws Exception {
+        Class<?> clazz = Class.forName(taskData.getTaskClass());
+        Task taskInstance = (Task) clazz.getDeclaredConstructor().newInstance();
+        taskInstance.execute(new TaskParams(taskData.getParams()));
+    }
+
+    @Override
+    public void destroy(String category) {
+        ExecutorService executor = workers.get(category);
+        if (executor != null) {
+            executor.shutdown();
+            workers.remove(category);
+            logger.info("Worker destroyed for category: {}", category);
         }
     }
 }
