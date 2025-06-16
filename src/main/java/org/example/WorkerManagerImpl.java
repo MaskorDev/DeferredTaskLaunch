@@ -1,6 +1,8 @@
 package org.example;
 
 import com.mysql.cj.x.protobuf.MysqlxCrud;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.crypto.CipherInputStream;
 import java.sql.*;
@@ -10,12 +12,15 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.*;
 
+import static com.mysql.cj.conf.PropertyKey.logger;
+
 public class WorkerManagerImpl implements WorkerManager {
+    private static final Logger logger = LoggerFactory.getLogger(WorkerManagerImpl.class);
     private final ConcurrentMap<String, ExecutorService> workers = new ConcurrentHashMap<>();
     private final TaskManager taskManager;
 
     public WorkerManagerImpl(TaskManager taskManager) {
-        this.taskManager = new TaskManagerImpl();
+        this.taskManager = taskManager;
     }
 
     @Override
@@ -117,20 +122,22 @@ public class WorkerManagerImpl implements WorkerManager {
         while (attempt < task.getMaxAttempts() && !taskCompleted) {
             attempt++;
 
+            if (!lockTaskInDatabase(task.getId())) {
+                continue;
+            }
+
             try {
-                if (lockTaskInDatabase(task.getId())) {
-                    executeTask(task);
-                    updateTaskStatus(task.getId(), "COMPLETED");
-                    taskCompleted = true;
-                }
+                executeTask(task);
+                updateTaskStatus(task.getId(), "COMPLETED");
+                taskCompleted = true;
             } catch (Exception ex) {
+                logger.error("Task attempt failed", ex);
                 if (attempt < task.getMaxAttempts()) {
                     long delay = calculateRetryDelay(task, attempt);
                     scheduleNextAttemp(task, delay);
                 } else {
                     updateTaskStatus(task.getId(), "FAILED");
                 }
-                System.out.println(ex);
             } finally {
                 unlockTaskInDatabase(task.getId());
             }
@@ -142,12 +149,10 @@ public class WorkerManagerImpl implements WorkerManager {
                 "WHERE id = ? AND status = 'PENDING'";
 
         try (Connection conn = DatabaseConnection.getConnection();
-             PreparedStatement statement = conn.prepareStatement(sql)) {
-            statement.setLong(1, taskId);
-
-            statement.executeUpdate();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            stmt.setLong(1, taskId);
+            return stmt.executeUpdate() > 0; // Возвращаем true если заблокировали
         }
-        return false;
     }
 
     private boolean unlockTaskInDatabase(long taskId) throws SQLException {
@@ -172,18 +177,19 @@ public class WorkerManagerImpl implements WorkerManager {
     private void scheduleNextAttemp(TaskData task, long delayMs) {
         LocalDateTime nextAttempt = LocalDateTime.now().plus(delayMs, ChronoUnit.MILLIS);
 
-        String sql = "UPDATE schedule_tasks " +
+        String sql = "UPDATE scheduled_tasks " +
                 "SET status = 'PENDING', " +
                 "attempt_count = attempt_count + 1, " +
                 "next_attempt_time = ? " +
                 "WHERE id = ?";
 
         try (Connection conn = DatabaseConnection.getConnection();
-        PreparedStatement stmt = conn.prepareStatement(sql)) {
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.setTimestamp(1, Timestamp.valueOf(nextAttempt));
             stmt.setLong(2, task.getId());
+            stmt.executeUpdate(); // Важно!
         } catch (SQLException ex) {
-            System.out.println(ex);
+            logger.error("Failed to reschedule task {}", task.getId(), ex);
         }
     }
 }

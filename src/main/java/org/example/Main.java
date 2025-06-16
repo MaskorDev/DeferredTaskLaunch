@@ -5,49 +5,44 @@ import java.time.LocalDateTime;
 
 //TIP To <b>Run</b> code, press <shortcut actionId="Run"/> or
 // click the <icon src="AllIcons.Actions.Execute"/> icon in the gutter.
+
 public class Main {
-    public static void main(String[] args) throws InterruptedException, SQLException {
-        TaskManager taskManager = new TaskManagerImpl();
-        WorkerManager workerManager = new WorkerManagerImpl(taskManager);
 
-        WorkerParams workerParams = new WorkerParams("email", 3);
-        DatabaseConnection.testConnection();
-        DatabaseConnection.initializeDatabaseForCategory(workerParams.getCategory());
-        RetryPolicyParam retryPolicyParam = new RetryPolicyParam(
-                true,
-                3,
-                2.0,
-                30000
-        );
-        workerManager.init(workerParams, retryPolicyParam);
+    @SuppressWarnings("unchecked")
+    private static Class<Task> asTaskClass(Class<? extends Task> clazz) {
+        return (Class<Task>) clazz;
+    }
 
-        TaskParams params = new TaskParams("test@example.com");
-        long taskid = taskManager.schedule(
-                "email",
-                Task.class,
-                params,
-                LocalDateTime.now().plusSeconds(10)
-        );
-        System.out.println("Создана задача ID: " + taskid);
+    public static void main(String[] args) {
+        try {
+            TaskManager taskManager = new TaskManagerImpl();
+            WorkerManager workerManager = new WorkerManagerImpl(taskManager);
 
-        long immediateTaskId = taskManager.schedule(
-                "email",
-                Task.class,
-                params,
-                LocalDateTime.now().minusMinutes(1)
-        );
-        System.out.println("Создана немедленная задача ID: " + taskid);
+            // Инициализация воркера для категории "email"
+            workerManager.init(
+                    new WorkerParams("email", 3), // 3 потока для обработки
+                    new RetryPolicyParam(true, 3, 2.0, 30000) // Политика повторов
+            );
 
-        System.out.println("Ожидаем выполнение задач...");
-        Thread.sleep(60000);
+            // Создание и отправка задачи
+            TaskParams params = new TaskParams(
+                    "{\"to\":\"user@example.com\",\"subject\":\"Test\"}",
+                    3, true, 2.0, 30000
+            );
 
-        boolean cancelled = taskManager.cancel("email", taskid);
-        System.out.println("Задача " + taskid + " отменена: " + cancelled);
+            long taskId = taskManager.schedule(
+                    "email",
+                    asTaskClass(EmailTask.class),
+                    params,
+                    LocalDateTime.now().plusSeconds(10)
+            );
 
-        workerManager.destroy("email");
-        System.out.println("Система остановлена");
+            System.out.println("Задача создана с ID: " + taskId);
 
+            Thread.sleep(30000);
 
-
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 }

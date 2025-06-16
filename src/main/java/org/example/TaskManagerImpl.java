@@ -7,16 +7,21 @@ import java.time.LocalDateTime;
 public class TaskManagerImpl implements TaskManager{
 
     @Override
-    public long schedule(String category, Class<Task> clazz, TaskParams params, LocalDateTime time){
-        String sql = "INSERT INTO scheduled_tasks (category, task_class, params, scheduled_time,"
-                + "max_attempts, exponential_backoff, backoff_base, max_backoff_ms" + "VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+    public long schedule(String category, Class<Task> clazz,
+                         TaskParams params, LocalDateTime time) {
+        String sql = "INSERT INTO deferred_" + category +
+                " (category, task_class, params, scheduled_time, " +
+                "max_attempts, exponential_backoff, backoff_base, max_backoff_ms) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)";  // Добавлено поле category
+
         try (Connection conn = DatabaseConnection.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(sql, PreparedStatement.RETURN_GENERATED_KEYS)) {
-            stmt.setString(1, category);
+             PreparedStatement stmt = conn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
+
+            stmt.setString(1, category);  // Устанавливаем категорию
             stmt.setString(2, clazz.getName());
-            stmt.setString(3, params.getJsonData());
+            stmt.setString(3, params.toJson());
             stmt.setTimestamp(4, Timestamp.valueOf(time));
-            stmt.setInt(5, params.getMaxAttempt());
+            stmt.setInt(5, params.getMaxAttempts());
             stmt.setBoolean(6, params.isExponentialBackoff());
             stmt.setDouble(7, params.getBackoffBase());
             stmt.setLong(8, params.getMaxBackoffMs());
@@ -29,9 +34,9 @@ public class TaskManagerImpl implements TaskManager{
                 }
             }
         } catch (SQLException ex) {
-            System.out.println("Не удалось создать задачу");
+            throw new RuntimeException("Failed to schedule task", ex);
         }
-        return 0;
+        throw new RuntimeException("Failed to get task ID");
     }
 
     @Override
