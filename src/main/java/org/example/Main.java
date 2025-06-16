@@ -1,15 +1,18 @@
 package org.example;
 
+import java.sql.SQLException;
 import java.time.LocalDateTime;
 
 //TIP To <b>Run</b> code, press <shortcut actionId="Run"/> or
 // click the <icon src="AllIcons.Actions.Execute"/> icon in the gutter.
 public class Main {
-    public static void main(String[] args) throws InterruptedException {
+    public static void main(String[] args) throws InterruptedException, SQLException {
         TaskManager taskManager = new TaskManagerImpl();
         WorkerManager workerManager = new WorkerManagerImpl(taskManager);
 
         WorkerParams workerParams = new WorkerParams("email", 3);
+        DatabaseConnection.testConnection();
+        DatabaseConnection.initializeDatabaseForCategory(workerParams.getCategory());
         RetryPolicyParam retryPolicyParam = new RetryPolicyParam(
                 true,
                 3,
@@ -36,7 +39,7 @@ public class Main {
         System.out.println("Создана немедленная задача ID: " + taskid);
 
         System.out.println("Ожидаем выполнение задач...");
-        Thread.sleep(60000); // Ждем 1 минуту
+        Thread.sleep(60000);
 
         boolean cancelled = taskManager.cancel("email", taskid);
         System.out.println("Задача " + taskid + " отменена: " + cancelled);
