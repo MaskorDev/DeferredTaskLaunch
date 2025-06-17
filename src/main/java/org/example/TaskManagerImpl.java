@@ -1,23 +1,27 @@
 package org.example;
 
-import javax.xml.crypto.Data;
+import javax.sql.DataSource;
 import java.sql.*;
 import java.time.LocalDateTime;
 
-public class TaskManagerImpl implements TaskManager{
+public class TaskManagerImpl implements TaskManager {
+    private final DataSource dataSource;
+
+    public TaskManagerImpl(DataSource dataSource) {
+        this.dataSource = dataSource;
+    }
 
     @Override
-    public long schedule(String category, Class<Task> clazz,
-                         TaskParams params, LocalDateTime time) {
+    public long schedule(String category, Class<Task> clazz, TaskParams params, LocalDateTime time) {
         String sql = "INSERT INTO deferred_" + category +
-                " (category, task_class, params, scheduled_time, " +
+                " (category, task_class, params, scheduled_time, status, " +
                 "max_attempts, exponential_backoff, backoff_base, max_backoff_ms) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)";  // Добавлено поле category
+                "VALUES (?, ?, ?, ?, 'PENDING', ?, ?, ?, ?)";
 
-        try (Connection conn = DatabaseConnection.getConnection();
+        try (Connection conn = dataSource.getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
 
-            stmt.setString(1, category);  // Устанавливаем категорию
+            stmt.setString(1, category);
             stmt.setString(2, clazz.getName());
             stmt.setString(3, params.toJson());
             stmt.setTimestamp(4, Timestamp.valueOf(time));
@@ -41,17 +45,17 @@ public class TaskManagerImpl implements TaskManager{
 
     @Override
     public boolean cancel(String category, long taskId) {
-        String sql = "UPDATE scheduled_tasks SET status = 'CANCELLED' " +
-                "WHERE id = ? AND category = ? AND status = 'PENDING'";
+        String sql = "UPDATE deferred_" + category +
+                " SET status = 'CANCELLED' " +
+                "WHERE id = ? AND status = 'PENDING'";
 
-        try (Connection conn = DatabaseConnection.getConnection();
+        try (Connection conn = dataSource.getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
+
             stmt.setLong(1, taskId);
-            stmt.setString(2, category);
             return stmt.executeUpdate() > 0;
         } catch (SQLException ex) {
-            System.out.println(ex);
+            throw new RuntimeException("Failed to cancel task", ex);
         }
-        return false;
     }
 }
