@@ -1,0 +1,13 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+scrape_configs:
+  - job_name: 'sample_monitoring'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['172.17.0.1:8081']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance  # будет "172.17.0.1:8081"
+      - target_label: application
+        replacement: "my_java_app"  # фиксированное имя

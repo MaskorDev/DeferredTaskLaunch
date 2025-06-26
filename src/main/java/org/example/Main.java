@@ -2,6 +2,8 @@ package org.example;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.LoggerContext;
+import io.prometheus.client.exporter.HTTPServer;
+import io.prometheus.client.hotspot.DefaultExports;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -29,6 +31,8 @@ public class Main {
 
     public static void main(String[] args) {
         try {
+            DefaultExports.initialize();
+            HTTPServer server = new HTTPServer(8081);
             initializeSystem();
             showMainMenu();
         } catch (Exception e) {
