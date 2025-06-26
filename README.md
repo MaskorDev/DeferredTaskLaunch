@@ -28,6 +28,12 @@
 
 - Java 17+  
 - MySQL 5.7+  
-- Maven 3.6+  
+- Maven 3.6+
+
+Визуализация метриков в Grafana
+
+![image](https://github.com/user-attachments/assets/9a76c61e-c28f-4d08-a8a8-107f1d92c6ff)
+![image](https://github.com/user-attachments/assets/9a76c61e-c28f-4d08-a8a8-107f1d92c6ff)
+  
 
 
