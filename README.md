@@ -33,6 +33,12 @@
 Визуализация метриков в Grafana
 
 ![image](https://github.com/user-attachments/assets/9a76c61e-c28f-4d08-a8a8-107f1d92c6ff)
+![image](https://github.com/user-attachments/assets/68c38bb3-1647-4687-ac10-2d266f05b1b5)
+![image](https://github.com/user-attachments/assets/d4cb91d1-cad2-43a4-b9d5-f01f15fb2406)
+![image](https://github.com/user-attachments/assets/d4cb91d1-cad2-43a4-b9d5-f01f15fb2406)
+
+![image](https://github.com/user-attachments/assets/68c38bb3-1647-4687-ac10-2d266f05b1b5)
+
 ![image](https://github.com/user-attachments/assets/9a76c61e-c28f-4d08-a8a8-107f1d92c6ff)
   
 
